@@ -1,0 +1,17 @@
+[package]
+name = "rdns"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies.async-std]
+version = "1.6"
+features = ["attributes"]
+
+
+[profile.release]
+strip = true  # Automatically strip symbols from the binary.
+opt-level = "z"  # Optimize for size.
+lto = true
+codegen-units = 1
+
+[dependencies]
