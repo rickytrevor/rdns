@@ -1,7 +1,11 @@
-use std::{collections::HashMap, fs, net::{Ipv4Addr, SocketAddrV4, UdpSocket}, sync::{Arc, Mutex}};
-use std::time::{Duration, Instant};
 use async_std::task;
-
+use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    fs,
+    net::{Ipv4Addr, SocketAddrV4, UdpSocket},
+    sync::{Arc, Mutex},
+};
 
 #[derive(Debug, Clone)]
 struct DnsRequest {
@@ -47,7 +51,6 @@ struct DnsResponseData {
     authority_records: Vec<DnsResourceRecord>,
     additional_records: Vec<DnsResourceRecord>,
 }
-
 
 impl DnsRequest {
     fn new() -> DnsRequest {
@@ -112,14 +115,12 @@ impl DnsRequest {
         }
         self.qtype = (buf[i] as u16) << 8 | buf[i + 1] as u16;
         self.qclass = (buf[i + 2] as u16) << 8 | buf[i + 3] as u16;
-        
     }
 
     fn parse_response(&mut self, buf: &[u8]) {
         self.parse(buf);
         self.response_data = buf.to_vec();
     }
-
 
     fn binarize(&self) -> Vec<u8> {
         if !self.response_data.is_empty() {
@@ -160,7 +161,10 @@ impl DnsRequest {
         let name = self.parse_name(buf, offset);
         let rr_type = (buf[*offset] as u16) << 8 | buf[*offset + 1] as u16;
         let rr_class = (buf[*offset + 2] as u16) << 8 | buf[*offset + 3] as u16;
-        let ttl = (buf[*offset + 4] as u32) << 24 | (buf[*offset + 5] as u32) << 16 | (buf[*offset + 6] as u32) << 8 | buf[*offset + 7] as u32;
+        let ttl = (buf[*offset + 4] as u32) << 24
+            | (buf[*offset + 5] as u32) << 16
+            | (buf[*offset + 6] as u32) << 8
+            | buf[*offset + 7] as u32;
         let rdlength = (buf[*offset + 8] as u16) << 8 | buf[*offset + 9] as u16;
         *offset += 10;
 
@@ -187,7 +191,8 @@ impl DnsRequest {
                 if !jumped {
                     jump_offset = *offset + 2;
                 }
-                *offset = (((buf[*offset] as u16) & 0b00111111) << 8 | buf[*offset + 1] as u16) as usize;
+                *offset =
+                    (((buf[*offset] as u16) & 0b00111111) << 8 | buf[*offset + 1] as u16) as usize;
                 jumped = true;
             } else {
                 let len = buf[*offset] as usize;
@@ -211,7 +216,7 @@ impl DnsRequest {
         let flags = (self.qr << 7) | (self.opcode << 3) | (self.aa << 2) | (self.tc << 1) | self.rd;
 
         offset += self.qname.len() + 2 + 4; // Skip over the question section
-        
+
         let mut answer_records = Vec::new();
         for _ in 0..self.ancount {
             let rr = self.parse_resource_record(&self.response_data, &mut offset);
@@ -244,7 +249,7 @@ impl DnsRequest {
         }
     }
 
-    fn binarize_response_data(&mut self, body: DnsResponseData){
+    fn binarize_response_data(&mut self, body: DnsResponseData) {
         let mut bin = Vec::new();
 
         // Header
@@ -287,9 +292,9 @@ impl DnsRequest {
             self.binarize_record(&record, &mut bin);
         }
 
-//        self.response_data = bin.clone();
+        //        self.response_data = bin.clone();
         self.response_data = bin;
-}
+    }
 
     fn binarize_record(&self, record: &DnsResourceRecord, bin: &mut Vec<u8>) {
         // Name
@@ -322,14 +327,12 @@ impl DnsRequest {
     }
 }
 
+type inner = (Vec<u8>, Instant);
 
-
-
-type Cache = Arc<Mutex<HashMap<String, Vec<u8>>>>;
+type Cache = Arc<Mutex<HashMap<String, inner>>>;
 
 async fn remove_expired_cache(cache: Cache) {
     loop {
-
         task::sleep(Duration::from_secs(1)).await;
         let mut cache = cache.lock().unwrap();
         let keys: Vec<String> = cache.keys().cloned().collect();
@@ -339,14 +342,22 @@ async fn remove_expired_cache(cache: Cache) {
             let cached_response = cache.get(&key).cloned();
             if let Some(response_data) = cached_response {
                 let mut request = DnsRequest::new();
-                request.parse_response(&response_data);
+                request.parse_response(&response_data.0);
+                let instant = Instant::now() - response_data.1;
+
                 let response_data = request.parse_response_data();
 
-                let expired = response_data.answer_records.iter().any(|record| record.ttl == 10);
+                let expired = response_data
+                    .answer_records
+                    .iter()
+                    .any(|record| instant.as_secs() > record.ttl as u64);
                 if expired {
                     cache.remove(&key);
-                    println!("Took: {:?}", now.elapsed());
-
+                    println!(
+                        "I'm removing this: {:?}, elapsed: {:?} ",
+                        &key,
+                        now.elapsed()
+                    );
                 }
             }
         }
@@ -362,9 +373,7 @@ fn main() {
     // Start the cache invalidation task
     task::spawn(remove_expired_cache(cache_clone));
 
-
-
-
+    // Test for adding a new record to the cache
     let mut testReq: DnsRequest = {
         let mut req = DnsRequest::new();
         req.id = 0x1234;
@@ -380,62 +389,70 @@ fn main() {
         req.ancount = 2;
         req.nscount = 0;
         req.arcount = 0;
-        req.qname = String::from("luca.civ.dev");
+        req.qname = String::from("test.rdns");
         req.qtype = 1;
         req.response_data = Vec::new();
         req.qclass = 1;
         req
     };
-    
-    // initialize a DnsResponseData struct
-    let dnsRes =   DnsResponseData { id: 55804, 
-        flags: 129,
-         questions: 1,
-          answers: 1,
-           authority_rrs: 0,
-            additional_rrs: 0,
-             query: ("luca.civ.dev".to_string(), 1, 1),
-              answer_records: 
-              vec![DnsResourceRecord 
-              { name: String::from("luca.civ.dev"),
-               rr_type: 1,
-                rr_class: 1
-                , ttl: 10,
-                 rdlength: 4,
-                  rdata: vec![69, 69, 14, 88] }], authority_records: vec![], additional_records: vec![] 
-            };
-        
-    // binarize the DnsResponseData struct
-    testReq.binarize_response_data(dnsRes);
 
+    // initialize a DnsResponseData struct
+    let dnsRes = DnsResponseData {
+        id: 55804,
+        flags: 129,
+        questions: 1,
+        answers: 1,
+        authority_rrs: 0,
+        additional_rrs: 0,
+        query: ("test.rdns".to_string(), 1, 1),
+        answer_records: vec![DnsResourceRecord {
+            name: String::from("test.rdns"),
+            rr_type: 1,
+            rr_class: 1,
+            ttl: 69420,
+            rdlength: 4,
+            rdata: vec![69, 42, 0, 13],
+        }],
+        authority_records: vec![],
+        additional_records: vec![],
+    };
+
+    // serialize the DnsResponseData struct
+    testReq.binarize_response_data(dnsRes);
 
     {
         let mut cache = cache.lock().unwrap();
-        cache.insert(String::from("luca.civ.dev"), testReq.response_data);
+        cache.insert(
+            String::from("test.rdns"),
+            (testReq.response_data, Instant::now()),
+        );
     }
 
-//    remove_expired_cache(frequently_used.clone()).await;
+    //    remove_expired_cache(frequently_used.clone()).await;
 
     let mut i: u32 = 0;
 
     loop {
         let start = Instant::now();
 
-        println!("Iteration: {}", i);
+        //        println!("Iteration: {}", i);
         i += 1;
         let mut buf = [0; 512];
-        let (amt, src) = socket.recv_from(&mut buf).expect("Couldn't receive from client");
-        println!("{}", src);
+        let (amt, src) = socket
+            .recv_from(&mut buf)
+            .expect("Couldn't receive from client");
+        //      println!("{}", src);
         let buf = &mut buf[..amt];
         let mut request = DnsRequest::new();
-        
+
         request.parse(buf);
         let response = {
             let mut cache = cache.lock().unwrap();
             match cache.get(&request.qname) {
                 Some(cached_response) => {
                     let mut cached_request = DnsRequest::new();
-                    cached_request.parse_response(cached_response);
+                    cached_request.parse_response(&cached_response.0);
+                    //                    println!("{:?}", cached_request.parse_response_data());
 
                     cached_request.id = request.id;
                     cached_request.binarize()
@@ -443,18 +460,23 @@ fn main() {
                 None => {
                     let mut res_buf = [0; 512];
                     let google_addr = SocketAddrV4::new(Ipv4Addr::new(1, 1, 1, 1), 53);
-                    google_socket.send_to(&request.binarize(), google_addr).expect("Couldn't send to Google DNS");
+                    google_socket
+                        .send_to(&request.binarize(), google_addr)
+                        .expect("Couldn't send to Google DNS");
 
-                    let (res_amt, _) = google_socket.recv_from(&mut res_buf).expect("Couldn't receive from Google DNS");
+                    let (res_amt, _) = google_socket
+                        .recv_from(&mut res_buf)
+                        .expect("Couldn't receive from Google DNS");
 
                     let response = res_buf[..res_amt].to_vec();
-                    cache.insert(request.qname.clone(), response.clone());
+                    cache.insert(request.qname.clone(), (response.clone(), Instant::now()));
 
                     response
                 }
             }
         };
-        socket.send_to(&response, src).expect("Couldn't send response to original client");
-
+        socket
+            .send_to(&response, src)
+            .expect("Couldn't send response to original client");
     }
 }
